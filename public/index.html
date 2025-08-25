@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Revolt Motors Voice Assistant</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0; padding: 0;
+      background: #121212; color: #fff;
+      height: 100vh; display: flex;
+      flex-direction: column; justify-content: center; align-items: center;
+    }
+    h1 { color: #e50914; margin-bottom: 30px; }
+    button {
+      background: #e50914; border: none; color: #fff;
+      padding: 15px 30px; margin: 10px; border-radius: 40px;
+      font-size: 1.2rem; cursor: pointer; transition: all 0.3s ease;
+      box-shadow: 0 4px 12px rgba(229, 9, 20, 0.4);
+    }
+    button:hover { background: #ff1a2c; transform: scale(1.05); }
+  </style>
+</head>
+<body>
+  <h1>🎤 Revolt Motors Voice Assistant</h1>
+  <button id="startBtn">Start Talking</button>
+  <button id="stopBtn">Stop</button>
+
+  <script>
+    let recognition;
+    let socket;
+
+    // Playback queue and control for interruption
+    let playing = false;
+    let currentAudio = null;
+    let queue = [];
+
+    // Strip markdown that could sound weird
+    function clean(text) {
+      return text.replace(/[*_#`]/g, "").replace(/\s{2,}/g, " ").trim();
+    }
+
+    // Detect primary script → pick language code for Google TTS
+    function detectLangCode(text) {
+      if (/[\u0900-\u097F]/.test(text)) return "hi"; // Devanagari (Hindi default)
+      if (/[\u0C00-\u0C7F]/.test(text)) return "te"; // Telugu
+      if (/[\u0B80-\u0BFF]/.test(text)) return "ta"; // Tamil
+      if (/[\u0C80-\u0CFF]/.test(text)) return "kn"; // Kannada
+      return "en"; // fallback English
+    }
+
+    // Split long text into safe chunks for Google TTS (~200 chars)
+    function chunkText(text, maxLen = 180) {
+      const sentences = text
+        .replace(/\n+/g, " ")
+        .split(/([.!?।]|।|\?|!)/) // keep sentence enders
+        .reduce((acc, cur, i, arr) => {
+          if (i % 2 === 0) {
+            const s = (cur + (arr[i + 1] || "")).trim();
+            if (s) acc.push(s);
+          }
+          return acc;
+        }, []);
+
+      const chunks = [];
+      let buf = "";
+
+      for (const s of sentences.length ? sentences : [text]) {
+        if ((buf + " " + s).trim().length <= maxLen) {
+          buf = (buf ? buf + " " : "") + s;
+        } else {
+          if (buf) chunks.push(buf);
+          if (s.length <= maxLen) {
+            buf = s;
+          } else {
+            // Hard split very long pieces
+            for (let i = 0; i < s.length; i += maxLen) {
+              chunks.push(s.slice(i, i + maxLen));
+            }
+            buf = "";
+          }
+        }
+      }
+      if (buf) chunks.push(buf);
+      return chunks;
+    }
+
+    function stopAudio() {
+      playing = false;
+      queue = [];
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.src = "";
+        currentAudio = null;
+      }
+    }
+
+    async function playChunks(chunks, lang) {
+      playing = true;
+      for (const piece of chunks) {
+        if (!playing) break;
+        const url = `/tts?lang=${encodeURIComponent(lang)}&text=${encodeURIComponent(piece)}`;
+        await new Promise((resolve) => {
+          currentAudio = new Audio(url);
+          currentAudio.onended = () => resolve();
+          currentAudio.onerror = () => resolve();
+          currentAudio.play().catch(() => resolve());
+        });
+      }
+      playing = false;
+      currentAudio = null;
+    }
+
+    // Speak any text in its detected language via server-side TTS proxy
+    function speak(text) {
+      const cleaned = clean(text);
+      const lang = detectLangCode(cleaned);
+      const chunks = chunkText(cleaned);
+      stopAudio(); // ensure we cancel any ongoing playback
+      playChunks(chunks, lang);
+      console.log("🗣️ Speaking in", lang, "chunks:", chunks.length);
+    }
+
+    function connectWebSocket() {
+      socket = new WebSocket("ws://localhost:3000");
+      socket.onopen = () => console.log("✅ Connected to server");
+      socket.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "ai" && msg.text) {
+          speak(msg.text);
+        }
+      };
+    }
+
+    function startRecognition() {
+      if (!("webkitSpeechRecognition" in window)) {
+        alert("❌ Speech recognition not supported in this browser.");
+        return;
+      }
+      recognition = new webkitSpeechRecognition();
+      recognition.lang = "en-IN"; // You can speak English like: "Explain RV400 in Telugu"
+      recognition.interimResults = false;
+      recognition.continuous = false;
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(transcript);
+          stopAudio(); // interruption: stop current speech
+        }
+      };
+      recognition.start();
+      console.log("🎙️ Listening in English...");
+    }
+
+    function stopAll() {
+      if (recognition) recognition.stop();
+      stopAudio();
+      console.log("🛑 Stopped.");
+    }
+
+    document.getElementById("startBtn").onclick = () => startRecognition();
+    document.getElementById("stopBtn").onclick = () => stopAll();
+
+    connectWebSocket();
+  </script>
+</body>
+</html>
