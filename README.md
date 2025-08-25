@@ -52,7 +52,7 @@ revolt-voice-bot/
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/your-username/revolt-voice-bot.git
+git clone https://github.com/saipraneeth-987/revolt-voice-bot.git
 cd revolt-voice-bot
 ```
 
@@ -64,11 +64,6 @@ npm install
 
 3. **Set up environment variables**
 
-* Copy the example file:
-
-```bash
-cp .env.example .env
-```
 
 * Open `.env` and paste your Google Gemini API key:
 
